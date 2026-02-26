@@ -31,6 +31,7 @@ interface ImageCarouselResultData {
     url: string;
     transcription: string;
     filename: string;
+    isVideo?: boolean;
   }>;
 }
 
@@ -120,16 +121,18 @@ export default function App() {
       });
 
       if (!response.ok) {
-        // Try to parse JSON error from backend
+        // Read body once (body can only be consumed once - avoids "Body is disturbed or locked")
+        const errorText = await response.text();
+        let message = errorText || 'Erro ao baixar vídeo';
         try {
-          const errorJson = await response.json();
-          const errorDetail = errorJson.detail || JSON.stringify(errorJson);
-          throw new Error(errorDetail);
-        } catch (parseErr) {
-          // If not JSON, use text
-          const errorText = await response.text();
-          throw new Error(errorText || 'Erro ao baixar vídeo');
+          const errorJson = JSON.parse(errorText);
+          if (errorJson?.detail) {
+            message = typeof errorJson.detail === 'string' ? errorJson.detail : JSON.stringify(errorJson.detail);
+          }
+        } catch (_) {
+          /* not JSON, use raw text as message */
         }
+        throw new Error(message);
       }
 
       // Check if response contains a direct download URL (Instagram/TikTok)
@@ -238,16 +241,17 @@ export default function App() {
       throw new Error('Resposta inválida da API');
     }
 
-    // Backend now includes URLs and clean filenames in the transcription response
+    // Backend includes imagens e vídeos (vídeos são transcritos via frames extraídos)
     const images = data.items
-      .filter((item: any) => !item.is_video && item.url)
+      .filter((item: any) => item.url)
       .map((item: any) => {
-        // Use clean filename from backend (e.g., instagram_username_01.jpg)
-        const filename = item.filename || item.file || `instagram_image_${item.index}.jpg`;
+        const isVideo = !!item.is_video;
+        const filename = item.filename || item.file || (isVideo ? `instagram_video_${item.index}.mp4` : `instagram_image_${item.index}.jpg`);
         return {
           url: item.url,
           transcription: item.text || '',
           filename,
+          isVideo,
         };
       });
 

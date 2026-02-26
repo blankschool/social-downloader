@@ -68,9 +68,17 @@ DEFAULT_TRANSCRIBE_PROMPT = (
     "Atue como um transcritor de documentos. Analise a imagem fornecida e "
     "transcreva todo o texto visível exatamente como ele aparece."
 )
+# Prompt em inglês para frames de vídeo - modelos vision funcionam melhor em inglês para OCR
+VIDEO_FRAME_PROMPT = (
+    "Extract ALL visible text from this video frame. Include: overlays, captions, subtitles, "
+    "words in boxes or bubbles, titles, hashtags, labels, and any text on screen. "
+    "Return ONLY the raw text, exactly as shown. Do not describe or explain."
+)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_AUDIO_MODEL = os.getenv("OPENAI_AUDIO_MODEL", "whisper-1")
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")
+# Para frames de vídeo: gpt-4o tem OCR melhor. Defina OPENAI_VIDEO_FRAME_MODEL=gpt-4o se quiser
+OPENAI_VIDEO_FRAME_MODEL = os.getenv("OPENAI_VIDEO_FRAME_MODEL", OPENAI_VISION_MODEL)
 
 # Cookies
 COOKIES_CANDIDATES = [
@@ -95,7 +103,9 @@ _cookies_cache: dict[Path, tuple[float, Optional[list[str]]]] = {}
 def get_cookies_args(url: Optional[str] = None) -> list[str]:
     """
     Retorna os argumentos de cookies para yt-dlp/gallery-dl
-    Ignora arquivos vazios ou com formato inválido para evitar erro 500.
+    - YouTube: usa cookies do navegador (resolve 403, PO Token, melhor qualidade)
+    - Instagram: usa cookies do navegador ou arquivo
+    - Outros: tenta arquivo de cookies
     """
     candidates: list[Path] = []
     lower_host = ""
@@ -105,6 +115,27 @@ def get_cookies_args(url: Optional[str] = None) -> list[str]:
         except Exception:
             lower_host = url.lower()
 
+    # YouTube: SEMPRE tentar cookies do navegador primeiro (resolve 403/PO Token)
+    if "youtube.com" in lower_host or "youtu.be" in lower_host:
+        browser_order = ["chrome", "firefox", "safari", "edge", "brave"]
+        for browser in browser_order:
+            try:
+                logger.info(f"Usando cookies do {browser} para YouTube")
+                return ["--cookies-from-browser", browser]
+            except:
+                continue
+    
+    # Instagram: tentar cookies do navegador
+    if "instagram.com" in lower_host:
+        browser_order = ["chrome", "firefox", "safari", "edge"]
+        for browser in browser_order:
+            try:
+                logger.info(f"Usando cookies do {browser} para Instagram")
+                return ["--cookies-from-browser", browser]
+            except:
+                continue
+
+    # Fallback: arquivos de cookies
     # Prioriza cookies específicos por domínio quando houver
     for domain, cookie_paths in DOMAIN_COOKIE_MAP.items():
         if domain in lower_host:
@@ -692,6 +723,20 @@ def detectPlatform(url: str) -> str:
     return "video"
 
 
+def get_youtube_best_quality_args() -> list[str]:
+    """
+    Returns yt-dlp arguments for YouTube ALWAYS best quality.
+    Use in all YouTube download paths (execute_ytdlp_optimized, stream_ytdlp, stream_ytdlp_merge, execute_ytdlp).
+    - No player_client specified: let yt-dlp auto-select working client (tries multiple: android, ios, web, mweb)
+    - Sort: resolution descending, then fps, so we get 4K/1080p first.
+    - Format: best video + best audio (any codec: VP9, AV1, H.264), fallback to single best.
+    """
+    return [
+        "-S", "res,fps",  # Prefer highest resolution, then highest fps
+        "-f", "bv*+ba/bestvideo+bestaudio/best",
+    ]
+
+
 def download_via_ytdlp_fallback(url: str, audio_only: bool = False) -> dict:
     """
     Fallback to yt-dlp if Cobalt fails.
@@ -823,34 +868,27 @@ def execute_ytdlp_optimized(url: str, output_format: str = "mp4") -> dict:
     cmd.extend(get_impersonate_args(url))
     cmd.extend(get_ffmpeg_location_arg())
     
-    # UNIVERSAL COMPATIBILITY DOWNLOAD
+    # YouTube: ALWAYS best quality, keep original codec (no re-encode = much faster)
+    if platform == "youtube":
+        cmd.extend(get_youtube_best_quality_args())
+        cmd.extend([
+            '--merge-output-format', 'mp4',  # merge to mp4 container
+            '--remux-video', 'mp4',  # remux without re-encoding (fast)
+        ])
+    else:
+        # Other platforms: H.264 + AAC for universal playback
+        cmd.extend([
+            '-f', 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            '--postprocessor-args', 'ffmpeg:-c:v libx264 -c:a aac',
+            '--recode-video', 'mp4',
+            '--merge-output-format', 'mp4',
+        ])
+    
     cmd.extend([
-        # Format selection: Prioritize H.264 video + AAC audio for universal playback
-        # This ensures the video plays on ALL devices/players without conversion
-        # Priority order:
-        #   1. MP4 with H.264 (avc1) video + M4A audio
-        #   2. Any MP4 video + M4A audio
-        #   3. Best MP4 available
-        #   4. Best format available (fallback)
-        '-f', 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        
-        # Post-processing: Re-encode if needed to ensure H.264 + AAC
-        # This guarantees compatibility even if source format is VP9/AV1/OPUS
-        '--postprocessor-args', 'ffmpeg:-c:v libx264 -c:a aac',
-        '--recode-video', 'mp4',
-        
-        # Merge to MP4 container
-        '--merge-output-format', 'mp4',
-        
-        # Basic settings
         '--no-check-certificate',
         '--no-playlist',
-        
-        # Restrict filename length and sanitize
-        '--restrict-filenames',  # ASCII-only filenames
-        '--trim-filenames', '200',  # Limit filename length
-        
-        # Output
+        '--restrict-filenames',
+        '--trim-filenames', '200',
         '-o', output_template,
         '--progress',
         '--newline',
@@ -1082,36 +1120,38 @@ def transcribe_audio_file(audio_path: Path, language: Optional[str] = None) -> s
         raise HTTPException(status_code=500, detail="Falha na transcrição de áudio")
 
 
-def transcribe_image_bytes(data: bytes, mime_type: str = "image/png", prompt: Optional[str] = None) -> str:
+def transcribe_image_bytes(
+    data: bytes,
+    mime_type: str = "image/png",
+    prompt: Optional[str] = None,
+    detail: Literal["low", "high", "auto"] = "auto",
+    model: Optional[str] = None,
+) -> str:
     """Transcreve texto de uma imagem usando modelo vision."""
     effective_prompt = prompt or DEFAULT_TRANSCRIBE_PROMPT
+    model_to_use = model or OPENAI_VISION_MODEL
     try:
         b64 = base64.b64encode(data).decode()
+        image_url_config: dict = {"url": f"data:{mime_type};base64,{b64}"}
+        if detail != "auto":
+            image_url_config["detail"] = detail
         res = get_openai_client().chat.completions.create(
-            model=OPENAI_VISION_MODEL,
+            model=model_to_use,
             messages=[
                 {
                     "role": "system",
-                    "content": "Extraia todo o texto visível da imagem e retorne somente o texto."
+                    "content": "Extract all visible text from the image. Return only the text, nothing else."
                 },
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": effective_prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime_type};base64,{b64}"
-                            }
-                        }
-                    ]
-                }
+                        {"type": "text", "text": effective_prompt},
+                        {"type": "image_url", "image_url": image_url_config},
+                    ],
+                },
             ],
             temperature=0,
-            max_tokens=800
+            max_tokens=800,
         )
         return res.choices[0].message.content.strip()
     except HTTPException:
@@ -1119,6 +1159,115 @@ def transcribe_image_bytes(data: bytes, mime_type: str = "image/png", prompt: Op
     except Exception as exc:
         logger.error(f"Erro ao transcrever imagem: {exc}")
         raise HTTPException(status_code=500, detail="Falha na transcrição de imagem")
+
+
+def get_video_duration_seconds(file_path: Path) -> float:
+    """Obtém duração do vídeo em segundos via ffprobe."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except (subprocess.SubprocessError, ValueError) as e:
+        logger.warning(f"ffprobe failed for {file_path}: {e}")
+    return 0.0
+
+
+def extract_video_frames_as_png(file_path: Path, num_frames: int = 1) -> list[bytes]:
+    """
+    Extrai frames do vídeo como PNG usando ffmpeg.
+    Distribui os frames ao longo da duração (0%, 25%, 50%, 75%, 100%).
+    Retorna lista de bytes PNG. Usa fallbacks se extração falhar.
+    """
+    duration = get_video_duration_seconds(file_path)
+    if duration <= 0:
+        duration = 5.0
+        num_frames = 3
+        timestamps = [0.0, 1.0, 2.0]
+        logger.info(f"Duration unknown for {file_path.name}, extracting 3 frames at 0,1,2s")
+    else:
+        # Mais frames para capturar texto que aparece em momentos específicos
+        num_frames = min(max(num_frames, 1), 12)
+        timestamps = []
+        for i in range(num_frames):
+            t = (i / (num_frames - 1)) * duration if num_frames > 1 else 0
+            timestamps.append(min(max(t, 0), max(0, duration - 0.05)))
+    out_dir = Path(tempfile.mkdtemp(prefix="video_frames_"))
+    frames: list[bytes] = []
+    try:
+        for i, ts in enumerate(timestamps):
+            out_file = out_dir / f"frame_{i:02d}.png"
+            # -ss antes de -i = seek rápido; -noautorotate evita problemas com metadata
+            cmd = [
+                "ffmpeg", "-y", "-noautorotate",
+                "-ss", str(ts),
+                "-i", str(file_path),
+                "-vframes", "1",
+                "-f", "image2",
+                "-q:v", "2",
+                str(out_file),
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and out_file.exists() and out_file.stat().st_size > 0:
+                frames.append(out_file.read_bytes())
+            else:
+                # Fallback: tentar com -i antes de -ss (mais lento, mais preciso)
+                stderr_preview = (result.stderr or "")[-300:] if result.stderr else ""
+                logger.warning(f"ffmpeg frame {i} ts={ts}s failed, trying accurate seek: {stderr_preview}")
+                cmd_fallback = [
+                    "ffmpeg", "-y", "-noautorotate",
+                    "-i", str(file_path),
+                    "-ss", str(ts),
+                    "-vframes", "1",
+                    "-f", "image2",
+                    str(out_file),
+                ]
+                result2 = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=90)
+                if result2.returncode == 0 and out_file.exists() and out_file.stat().st_size > 0:
+                    frames.append(out_file.read_bytes())
+        if not frames:
+            logger.warning(f"No frames extracted from {file_path} (tried {len(timestamps)} timestamps)")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+    return frames
+
+
+def transcribe_video_frames(file_path: Path, prompt: Optional[str] = None) -> str:
+    """
+    Extrai frames do vídeo, transcreve cada um como imagem e junta os textos.
+    Usa prompt específico para texto em vídeo (overlays, legendas, etc).
+    """
+    # Apenas o primeiro frame: muitos vídeos têm legendas que mudam; o frame inicial traz o conteúdo principal
+    frames = extract_video_frames_as_png(file_path, num_frames=1)
+    if not frames:
+        logger.warning(f"Nenhum frame extraído de {file_path}")
+        return ""
+    effective_prompt = prompt or VIDEO_FRAME_PROMPT
+    texts: list[str] = []
+    seen: set[str] = set()
+    for i, png_bytes in enumerate(frames):
+        try:
+            # gpt-4o + detail="high" para melhor OCR de texto em overlays
+            text = transcribe_image_bytes(
+                png_bytes,
+                mime_type="image/png",
+                prompt=effective_prompt,
+                detail="high",
+                model=OPENAI_VIDEO_FRAME_MODEL,
+            )
+            text = (text or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                texts.append(text)
+        except Exception as e:
+            logger.warning(f"Erro ao transcrever frame {i} do vídeo {file_path.name}: {e}")
+    result = "\n\n".join(texts).strip()
+    logger.info(f"Video {file_path.name}: {len(frames)} frames, {len(texts)} texts extracted")
+    return result
 
 
 def clean_instagram_filename(url: str, username: str, index: int) -> str:
@@ -1143,10 +1292,10 @@ def clean_instagram_filename(url: str, username: str, index: int) -> str:
             if '.' in clean_path:
                 base_ext = clean_path.rsplit('.', 1)[-1].lower()
                 # Validar extensão
-                if base_ext in ['jpg', 'jpeg', 'png', 'webp', 'gif']:
+                if base_ext in ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'webm', 'mov', 'm4v']:
                     ext = f'.{base_ext}'
         
-        # Gerar filename limpo: instagram_username_01.jpg
+        # Gerar filename limpo: instagram_username_01.jpg ou .mp4
         filename = f"instagram_{username}_{index:02d}{ext}"
         return sanitize_filename(filename, max_length=100)
     except Exception as e:
@@ -1213,16 +1362,18 @@ def transcribe_instagram_carousel(url: str, prompt: Optional[str]) -> list[dict]
                 clean_filename = clean_instagram_filename(direct_url, username, idx)
                 
                 if task_type == "video":
-                    result = {
+                    # Extrai frames do vídeo, converte em PNG e transcreve os textos
+                    text = transcribe_video_frames(file_path, prompt=prompt)
+                    t_end = perf_counter()
+                    logger.info(f"⏱️ Transcribed video (frames) {file_path.name}: {(t_end - t_start) * 1000:.0f}ms")
+                    return {
                         "index": idx,
                         "file": file_path.name,
                         "url": direct_url,
-                        "filename": clean_filename,  # Clean filename for download
+                        "filename": clean_filename,
                         "is_video": True,
-                        "text": ""
+                        "text": text
                     }
-                    logger.info(f"⏩ Skipped video {file_path.name}")
-                    return result
                 elif task_type == "image" or task_type == "unknown":
                     text = transcribe_image_bytes(file_path.read_bytes(), mime_type=mime, prompt=prompt)
                     t_end = perf_counter()
@@ -1410,36 +1561,25 @@ def execute_ytdlp(url: str, download_file: bool = True, output_format: str = "mp
                     "b[ext=mp4]/best"
                 ])
             elif is_youtube:
-                # YouTube: MAXIMUM SPEED optimization while keeping max quality
-                # Use pre-merged formats when available (avoids ffmpeg merge time)
+                # YouTube: ALWAYS best quality (same as execute_ytdlp_optimized)
+                cmd.extend(get_youtube_best_quality_args())
                 cmd.extend([
-                    '-f', 
-                    # Priority 1: Pre-merged high quality (no merge needed = faster)
-                    'best[height>=1080][ext=mp4]/'
-                    # Priority 2: Best video + best audio (needs merge but max quality)
-                    'bv*[height>=1080][ext=mp4]+ba[ext=m4a]/'
-                    'bv*[height>=1080]+ba/'
-                    # Priority 3: Any best available
-                    'bv+ba/b',
-                    '--extractor-args', 'youtube:player_client=ios,web',  # Try iOS client first (faster)
-                    '--concurrent-fragments', '16',  # Download 16 fragments simultaneously
-                    '--buffer-size', '32K',  # Larger buffer
-                    '--http-chunk-size', '10M',  # Large chunks
-                    '--retries', '3',  # Quick retry
+                    '--concurrent-fragments', '16',
+                    '--buffer-size', '32K',
+                    '--http-chunk-size', '10M',
+                    '--retries', '3',
                     '--fragment-retries', '3',
-                    '--no-check-certificate',  # Skip cert verification (faster)
+                    '--no-check-certificate',
                 ])
-                # Use aria2c for multi-threaded downloads (MUCH faster)
                 if shutil.which("aria2c"):
                     cmd.extend([
                         '--external-downloader', 'aria2c',
-                        '--external-downloader-args', 
+                        '--external-downloader-args',
                         'aria2c:-x 16 -s 16 -k 2M --min-split-size=1M --max-connection-per-server=16 --enable-http-pipelining=true',
                     ])
-                    logger.info("⚡ YouTube: Using aria2c with 16 parallel connections for MAX SPEED")
+                    logger.info("⚡ YouTube: aria2c + best quality (res,fps)")
                 else:
-                    # Even without aria2c, use concurrent fragments
-                    logger.info("⚡ YouTube: Using concurrent fragments (16) for faster download")
+                    logger.info("⚡ YouTube: best quality (res,fps)")
             else:
                 # Preferir h264/aac para compatibilidade ampla (Safari/iOS)
                 cmd.extend([
@@ -1610,9 +1750,13 @@ def stream_ytdlp(url: str, output_format: str = "mp4") -> dict:
     cmd.extend(get_impersonate_args(url))
     lower_url = url.lower()
     is_tiktok = "tiktok.com" in lower_url
+    is_youtube = "youtube.com" in lower_url or "youtu.be" in lower_url
 
-    # Para TikTok, não force formato; deixe yt-dlp escolher progressivo quando possível
-    if is_tiktok:
+    # YouTube: always best quality (same logic as execute_ytdlp_optimized)
+    if is_youtube:
+        cmd.extend(get_youtube_best_quality_args())
+        fmt = None  # already added by helper
+    elif is_tiktok:
         fmt = (
             "bv*[ext=mp4][protocol!*=dash][protocol!*=m3u8][acodec!=none]/"
             "b[ext=mp4]/best"
@@ -1634,8 +1778,9 @@ def stream_ytdlp(url: str, output_format: str = "mp4") -> dict:
     else:
         fmt = "best"
 
+    if fmt is not None:
+        cmd.extend(["-f", fmt])
     cmd.extend([
-        "-f", fmt,
         "-o", "-",
         "--no-playlist",
         "--quiet",
@@ -1699,6 +1844,10 @@ def stream_ytdlp_merge(url: str, output_format: str = "mp4") -> dict:
     cmd = [choose_yt_dlp_binary_for_url(url)]
     cmd.extend(get_cookies_args(url))
     cmd.extend(get_impersonate_args(url))
+    lower_url = url.lower()
+    is_youtube = "youtube.com" in lower_url or "youtu.be" in lower_url
+    if is_youtube:
+        cmd.extend(get_youtube_best_quality_args())
     cmd.extend([
         "-f", "bv*+ba/bestvideo+bestaudio/best",
         "--merge-output-format", output_format,
@@ -2191,15 +2340,15 @@ async def download_binary(
     platform = detectPlatform(url)
     
     try:
-        # Instagram: Use gallery-dl URLs for fast redirect (reels, carousels, posts, stories)
+        # Instagram: Try gallery-dl first, fallback to yt-dlp
         if platform == "instagram":
-            logger.info("📸 Instagram detected - using gallery-dl for direct URL")
+            logger.info("📸 Instagram detected - trying gallery-dl first")
             try:
                 # Extract direct URLs only (fast, no download)
                 urls = execute_gallery_dl_urls(url)
                 
                 if not urls:
-                    raise HTTPException(status_code=404, detail="No media URLs found")
+                    raise Exception("No media URLs found from gallery-dl")
                 
                 # Get first URL (for reels/posts with single video)
                 direct_url = urls[0]
@@ -2209,9 +2358,7 @@ async def download_binary(
                 
                 t_end = perf_counter()
                 total_ms = int((t_end - t_start) * 1000)
-                logger.info(f"✅ Instagram direct URL extracted in {total_ms}ms")
-                logger.info(f"👤 Username: {username}")
-                logger.info(f"🔗 Direct URL: {direct_url[:100]}...")
+                logger.info(f"✅ Instagram direct URL via gallery-dl in {total_ms}ms")
                 
                 # Return JSON with direct URL for frontend redirect
                 return Response(
@@ -2229,60 +2376,110 @@ async def download_binary(
                 )
                 
             except Exception as e:
-                logger.error(f"gallery-dl failed for Instagram: {e}")
-                raise HTTPException(
-                    status_code=503,
-                    detail="Não foi possível baixar este conteúdo do Instagram. Verifique se a conta não é privada ou tente novamente."
-                )
+                # Fallback to yt-dlp for Instagram
+                logger.warning(f"⚠️ gallery-dl failed ({e}), trying yt-dlp for Instagram")
+                try:
+                    result = execute_ytdlp_optimized(url, output_format="mp4")
+                    file_path = Path(result["file_path"])
+                    
+                    with open(file_path, "rb") as f:
+                        content = f.read()
+                    
+                    filename = file_path.name
+                    file_path.unlink(missing_ok=True)
+                    
+                    t_end = perf_counter()
+                    total_ms = int((t_end - t_start) * 1000)
+                    logger.info(f"✅ Instagram downloaded via yt-dlp in {total_ms}ms, size: {len(content)} bytes")
+                    
+                    return Response(
+                        content=content,
+                        media_type="video/mp4",
+                        headers={
+                            "Content-Disposition": f'attachment; filename="{filename}"',
+                            "X-Tool-Used": "yt-dlp",
+                            "X-Processing-Time-Ms": str(total_ms),
+                            "X-File-Size": str(len(content))
+                        }
+                    )
+                except Exception as e2:
+                    logger.error(f"yt-dlp also failed for Instagram: {e2}")
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Não foi possível baixar este conteúdo do Instagram. Verifique se a conta não é privada ou tente novamente."
+                    )
         
-        # TikTok: Return direct URL via tikwm API (JSON response to avoid CORS issues)
+        # TikTok: Try tikwm API first, fallback to yt-dlp
         elif platform == "tiktok":
-            logger.info("🎵 TikTok detected - using tikwm API for direct URL")
+            logger.info("🎵 TikTok detected - trying tikwm API first")
             
-            # Use tikwm to get video metadata
-            api_url = f"https://www.tikwm.com/api/?url={url}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-                "Connection": "keep-alive",
-            }
-            resp = requests.get(api_url, headers=headers, timeout=8, verify=False)
-            resp.raise_for_status()
-            data = resp.json()
-            
-            if data.get("code") != 0:
-                raise HTTPException(status_code=500, detail=f"tikwm API error: {data.get('msg', 'Unknown error')}")
-            
-            video_data = data.get("data", {})
-            
-            # Try HD video first, then fallback to standard quality
-            direct_url = video_data.get("hdplay") or video_data.get("play") or video_data.get("wmplay")
-            
-            if not direct_url:
-                raise HTTPException(status_code=404, detail="No video URL found from tikwm")
-            
-            # Extract username and video ID for filename (format: tiktok_username_videoid.mp4)
-            author = video_data.get("author", {}).get("unique_id", "user")
-            video_id = video_data.get("id", "video")
-            filename = f"tiktok_{author}_{video_id}.mp4"
-            
-            t_end = perf_counter()
-            total_ms = int((t_end - t_start) * 1000)
-            logger.info(f"✅ TikTok direct URL: {direct_url[:100]}...")
-            logger.info(f"📁 Filename: {filename}")
-            
-            return Response(
-                content=json.dumps({
-                    "direct_url": direct_url,
-                    "platform": platform,
-                    "filename": filename
-                }),
-                media_type="application/json",
-                headers={
-                    "X-Direct-Download": "true",
-                    "X-Platform": platform,
-                    "X-Processing-Time-Ms": str(total_ms)
+            try:
+                # Use tikwm to get video metadata
+                api_url = f"https://www.tikwm.com/api/?url={url}"
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                    "Connection": "keep-alive",
                 }
-            )
+                resp = requests.get(api_url, headers=headers, timeout=8, verify=False)
+                resp.raise_for_status()
+                data = resp.json()
+                
+                if data.get("code") != 0:
+                    raise Exception(f"tikwm error: {data.get('msg', 'Unknown error')}")
+                
+                video_data = data.get("data", {})
+                direct_url = video_data.get("hdplay") or video_data.get("play") or video_data.get("wmplay")
+                
+                if not direct_url:
+                    raise Exception("No video URL found from tikwm")
+                
+                author = video_data.get("author", {}).get("unique_id", "user")
+                video_id = video_data.get("id", "video")
+                filename = f"tiktok_{author}_{video_id}.mp4"
+                
+                t_end = perf_counter()
+                total_ms = int((t_end - t_start) * 1000)
+                logger.info(f"✅ TikTok direct URL via tikwm: {direct_url[:100]}...")
+                
+                return Response(
+                    content=json.dumps({
+                        "direct_url": direct_url,
+                        "platform": platform,
+                        "filename": filename
+                    }),
+                    media_type="application/json",
+                    headers={
+                        "X-Direct-Download": "true",
+                        "X-Platform": platform,
+                        "X-Processing-Time-Ms": str(total_ms)
+                    }
+                )
+            except Exception as e:
+                # Fallback to yt-dlp
+                logger.warning(f"⚠️ tikwm failed ({e}), using yt-dlp fallback")
+                result = execute_ytdlp_optimized(url, output_format="mp4")
+                file_path = Path(result["file_path"])
+                
+                with open(file_path, "rb") as f:
+                    content = f.read()
+                
+                filename = file_path.name
+                file_path.unlink(missing_ok=True)
+                
+                t_end = perf_counter()
+                total_ms = int((t_end - t_start) * 1000)
+                logger.info(f"✅ TikTok downloaded via yt-dlp in {total_ms}ms, size: {len(content)} bytes")
+                
+                return Response(
+                    content=content,
+                    media_type="video/mp4",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"',
+                        "X-Tool-Used": "yt-dlp",
+                        "X-Processing-Time-Ms": str(total_ms),
+                        "X-File-Size": str(len(content))
+                    }
+                )
         
         # YouTube: Download with yt-dlp (best quality) and send complete file
         elif platform == "youtube":
