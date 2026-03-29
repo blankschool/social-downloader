@@ -92,6 +92,14 @@ DOMAIN_COOKIE_MAP: dict[str, list[Path]] = {
         COOKIES_DIR / "www.instagram.com_cookies.txt",
         ROOT_DIR / "www.instagram.com_cookies.txt",
     ],
+    "youtube.com": [
+        COOKIES_DIR / "www.youtube.com_cookies.txt",
+        ROOT_DIR / "www.youtube.com_cookies.txt",
+    ],
+    "youtu.be": [
+        COOKIES_DIR / "www.youtube.com_cookies.txt",
+        ROOT_DIR / "www.youtube.com_cookies.txt",
+    ],
 }
 ALT_COOKIES_FILES = [p for paths in DOMAIN_COOKIE_MAP.values() for p in paths]
 _cookies_cache: dict[Path, tuple[float, Optional[list[str]]]] = {}

@@ -47,18 +47,66 @@ async def refresh_instagram() -> None:
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+            ],
+        )
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+            locale="pt-BR",
+        )
+        # Ocultar webdriver
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
         page = await context.new_page()
 
-        await page.goto("https://www.instagram.com/accounts/login/")
+        await page.goto("https://www.instagram.com/accounts/login/", wait_until="networkidle", timeout=30000)
+        await page.wait_for_timeout(2000)
+
+        # Aceitar cookies se aparecer o banner
+        try:
+            await page.click('text="Allow all cookies"', timeout=4000)
+            await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+        try:
+            await page.click('text="Aceitar todos os cookies"', timeout=2000)
+            await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+        # Preencher login
+        await page.wait_for_selector('input[name="username"]', timeout=15000)
         await page.fill('input[name="username"]', username)
+        await page.wait_for_timeout(500)
         await page.fill('input[name="password"]', password)
+        await page.wait_for_timeout(500)
         await page.click('button[type="submit"]')
-        await page.wait_for_url("https://www.instagram.com/", timeout=15000)
+
+        # Aguardar redirecionamento ou página home
+        try:
+            await page.wait_for_url("https://www.instagram.com/", timeout=20000)
+        except Exception:
+            # Pode redirecionar para /accounts/onetap/ ou similar antes de chegar na home
+            await page.wait_for_timeout(5000)
 
         cookies = await context.cookies()
         ig_cookies = [c for c in cookies if "instagram.com" in c.get("domain", "")]
+
+        if not ig_cookies:
+            print("Instagram: nenhum cookie capturado — possível CAPTCHA ou 2FA necessário.")
+            await browser.close()
+            return
 
         out = COOKIES_DIR / "www.instagram.com_cookies.txt"
         out.write_text(format_netscape(ig_cookies))
