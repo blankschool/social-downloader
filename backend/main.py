@@ -784,7 +784,7 @@ def download_audio_from_url(url: str, audio_format: str = "mp3") -> Path:
     # Adicionar otimizações do YouTube antes da extração de áudio
     if is_youtube:
         cmd.extend([
-            '--extractor-args', 'youtube:player_client=android',  # Emular cliente Android
+            '--js-runtimes', 'node',  # Enable Node.js for n-challenge solving
             '--http-chunk-size', '10M',  # Chunks de 10MB
         ])
         # Verificar se aria2c está disponível para multi-threading
