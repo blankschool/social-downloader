@@ -702,12 +702,17 @@ def execute_ytdlp_optimized(url: str, output_format: str = "mp4") -> dict:
             raise Exception(f"yt-dlp failed: {result.stderr[:500]}")
         
         # Find the downloaded file (search by pattern since filename is dynamic)
+        # Include all common video formats (YouTube may produce webm when remux fails)
+        video_extensions = ["*.mp4", "*.webm", "*.mkv", "*.mov", "*.avi"]
+        all_downloaded = []
+        for ext in video_extensions:
+            all_downloaded.extend(DOWNLOADS_DIR.glob(ext))
         downloaded_files = sorted(
-            DOWNLOADS_DIR.glob("*.mp4"),
+            all_downloaded,
             key=lambda p: p.stat().st_mtime,
             reverse=True
         )
-        
+
         if not downloaded_files:
             raise Exception("No file downloaded")
         
@@ -1430,8 +1435,12 @@ def execute_ytdlp(url: str, download_file: bool = True, output_format: str = "mp
 
         if download_file:
             # Procurar arquivo baixado (search by most recent since filename is dynamic)
+            video_extensions = ["*.mp4", "*.webm", "*.mkv", "*.mov", "*.avi"]
+            all_downloaded = []
+            for ext in video_extensions:
+                all_downloaded.extend(DOWNLOADS_DIR.glob(ext))
             downloaded_files = sorted(
-                DOWNLOADS_DIR.glob("*.mp4"),
+                all_downloaded,
                 key=lambda p: p.stat().st_mtime,
                 reverse=True
             )
