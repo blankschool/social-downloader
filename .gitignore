@@ -24,6 +24,7 @@ cookies.txt
 config/.env
 config/cookies/*
 !config/cookies/.gitkeep
+ngrok.yml
 
 # IDE
 .vscode/

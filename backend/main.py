@@ -54,16 +54,13 @@ FRONTEND_BUILD_DIR = FRONTEND_DIR / "dist"
 # Use temporary directory for downloads (auto-cleanup)
 DOWNLOADS_DIR = Path(tempfile.gettempdir()) / "n8n-download-bridge"
 
-# Configurações - Load .env BEFORE importing cobalt_config
+# Configurações
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(CONFIG_DIR / ".env", override=False)
 
-# Import Cobalt after environment variables are loaded
-sys.path.insert(0, str(ROOT_DIR / "backend"))
-from lib.cobalt_client import CobaltClient, CobaltAPIError, CobaltRateLimitError
-from config import cobalt_config
-DEFAULT_API_KEY = "cI4cA4Xvml2O0TCXdxRDuhHdY1251G34gso3VdHfDIc"
-API_KEY = os.getenv("API_KEY", DEFAULT_API_KEY)
+API_KEY = os.getenv("API_KEY", "")
+if not API_KEY:
+    raise RuntimeError("API_KEY não configurada. Defina API_KEY no arquivo .env")
 DEFAULT_TRANSCRIBE_PROMPT = (
     "Atue como um transcritor de documentos. Analise a imagem fornecida e "
     "transcreva todo o texto visível exatamente como ele aparece."
@@ -102,10 +99,9 @@ _cookies_cache: dict[Path, tuple[float, Optional[list[str]]]] = {}
 
 def get_cookies_args(url: Optional[str] = None) -> list[str]:
     """
-    Retorna os argumentos de cookies para yt-dlp/gallery-dl
-    - YouTube: usa cookies do navegador (resolve 403, PO Token, melhor qualidade)
-    - Instagram: usa cookies do navegador ou arquivo
-    - Outros: tenta arquivo de cookies
+    Retorna os argumentos de cookies para yt-dlp/gallery-dl.
+    Usa arquivos de cookies (compatível com VPS sem navegador instalado).
+    Prioriza cookies específicos por domínio quando disponíveis.
     """
     candidates: list[Path] = []
     lower_host = ""
@@ -115,27 +111,6 @@ def get_cookies_args(url: Optional[str] = None) -> list[str]:
         except Exception:
             lower_host = url.lower()
 
-    # YouTube: SEMPRE tentar cookies do navegador primeiro (resolve 403/PO Token)
-    if "youtube.com" in lower_host or "youtu.be" in lower_host:
-        browser_order = ["chrome", "firefox", "safari", "edge", "brave"]
-        for browser in browser_order:
-            try:
-                logger.info(f"Usando cookies do {browser} para YouTube")
-                return ["--cookies-from-browser", browser]
-            except:
-                continue
-    
-    # Instagram: tentar cookies do navegador
-    if "instagram.com" in lower_host:
-        browser_order = ["chrome", "firefox", "safari", "edge"]
-        for browser in browser_order:
-            try:
-                logger.info(f"Usando cookies do {browser} para Instagram")
-                return ["--cookies-from-browser", browser]
-            except:
-                continue
-
-    # Fallback: arquivos de cookies
     # Prioriza cookies específicos por domínio quando houver
     for domain, cookie_paths in DOMAIN_COOKIE_MAP.items():
         if domain in lower_host:
@@ -194,7 +169,6 @@ _yt_dlp_path_cache: Optional[str] = None
 _gallery_dl_path_cache: Optional[str] = None
 _ffmpeg_path_cache: Optional[str] = None
 _openai_client: Optional[OpenAI] = None
-_cobalt_client: Optional[CobaltClient] = None
 
 
 def _is_executable(path: Path) -> bool:
@@ -513,200 +487,6 @@ def get_openai_client() -> OpenAI:
     _openai_client = OpenAI(api_key=OPENAI_API_KEY)
     return _openai_client
 
-
-def get_cobalt_client() -> CobaltClient:
-    """Retorna cliente Cobalt com cache."""
-    global _cobalt_client
-    if _cobalt_client:
-        return _cobalt_client
-    
-    api_url = cobalt_config.get_cobalt_url()
-    api_key = cobalt_config.COBALT_API_KEY
-    timeout = cobalt_config.COBALT_TIMEOUT
-    
-    _cobalt_client = CobaltClient(
-        api_url=api_url,
-        api_key=api_key,
-        timeout=timeout
-    )
-    logger.info(f"Cobalt client initialized: {api_url}")
-    return _cobalt_client
-
-
-def download_via_cobalt(url: str, audio_only: bool = False, quality: str = "max") -> dict:
-    """
-    Download media using Cobalt API.
-    Returns dict with:
-        - blob: bytes of the downloaded file
-        - filename: suggested filename
-        - content_type: MIME type
-    """
-    t0 = perf_counter()
-    client = get_cobalt_client()
-    platform = detectPlatform(url)  # Detect platform early for use throughout function
-    
-    try:
-        logger.info(f"Downloading via Cobalt: {url} (audio_only={audio_only}, quality={quality})")
-        
-        # Get download info from Cobalt
-        result = client.download(
-            url=url,
-            quality=quality,
-            audio_only=audio_only,
-            audio_format="mp3" if audio_only else "best",
-        )
-        
-        status = result.get("status")
-        t1 = perf_counter()
-        logger.info(f"Cobalt response received in {(t1 - t0) * 1000:.0f}ms, status={status}")
-        
-        # Handle different response types
-        download_url = None
-        
-        if status == "redirect" or status == "stream" or status == "tunnel":
-            download_url = result.get("url")
-        elif status == "picker":
-            # Multiple options (e.g., Twitter with multiple videos)
-            urls = result.get("picker", [])
-            if urls:
-                download_url = urls[0].get("url")
-        
-        if not download_url:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Cobalt returned unexpected status: {status}"
-            )
-        
-        # Download the actual file with optimized settings
-        t2 = perf_counter()
-        # Use session for connection pooling and keep-alive
-        download_session = requests.Session()
-        download_session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Accept": "*/*",
-            "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
-            "Referer": url,
-        })
-        response = download_session.get(
-            download_url, 
-            timeout=30,  # Reduced timeout for faster failure
-            stream=True,
-            allow_redirects=True,
-            verify=False,  # Skip SSL verification for speed
-        )
-        response.raise_for_status()
-        
-        # Get filename from Content-Disposition
-        filename = None
-        content_disposition = response.headers.get("Content-Disposition", "")
-        if "filename=" in content_disposition:
-            filename = content_disposition.split("filename=")[-1].strip('"')
-        
-        # Fallback filename
-        if not filename:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            ext = "mp3" if audio_only else "mp4"
-            content_type = response.headers.get("Content-Type", "")
-            if "webm" in content_type:
-                ext = "webm"
-            filename = f"{platform}_{timestamp}.{ext}"
-        
-        # Check Content-Length header before downloading
-        content_length = response.headers.get("Content-Length")
-        if content_length:
-            try:
-                expected_size = int(content_length)
-                if expected_size == 0:
-                    logger.error(f"❌ Content-Length is 0 for {url} (platform: {platform})")
-                    if cobalt_config.ENABLE_YTDLP_FALLBACK:
-                        logger.info("🔄 Falling back to yt-dlp due to zero Content-Length")
-                        return download_via_ytdlp_fallback(url, audio_only)
-                    raise HTTPException(status_code=500, detail="Download failed: Content-Length is 0")
-            except ValueError:
-                pass  # Invalid Content-Length, continue with download
-        
-        # Read the file content with larger chunks for speed
-        content = b""
-        for chunk in response.iter_content(chunk_size=65536):  # 64KB chunks for faster I/O
-            if chunk:
-                content += chunk
-        
-        t3 = perf_counter()
-        size_mb = len(content) / (1024 * 1024)
-        
-        # Validate that content is not empty
-        if len(content) == 0:
-            logger.error(f"❌ Empty content received from Cobalt for {url} (platform: {platform}, status: {status})")
-            logger.error(f"   Download URL: {download_url[:200]}...")
-            logger.error(f"   Response headers: {dict(response.headers)}")
-            if cobalt_config.ENABLE_YTDLP_FALLBACK:
-                logger.info("🔄 Falling back to yt-dlp due to empty content")
-                return download_via_ytdlp_fallback(url, audio_only)
-            raise HTTPException(status_code=500, detail="Download failed: empty content from Cobalt")
-        
-        logger.info(f"✅ Downloaded {size_mb:.2f}MB via Cobalt in {(t3 - t2) * 1000:.0f}ms")
-        logger.info(f"🏁 Total Cobalt download time for {platform}: {(t3 - t0) * 1000:.0f}ms")
-        
-        content_type = response.headers.get("Content-Type", "application/octet-stream")
-        
-        return {
-            "blob": content,
-            "filename": filename,
-            "content_type": content_type,
-            "size": len(content)
-        }
-        
-    except CobaltRateLimitError as e:
-        logger.error(f"Cobalt rate limit: {e}")
-        raise HTTPException(
-            status_code=429,
-            detail="Rate limit excedido. Tente novamente em alguns minutos."
-        )
-    
-    except CobaltAPIError as e:
-        error_msg = str(e)
-        logger.error(f"❌ Cobalt API error: {error_msg}")
-        
-        # Check if it's a TikTok-specific error (platform already defined at function start)
-        is_tiktok = platform == "tiktok"
-        is_tiktok_error = "tiktok" in error_msg.lower() or "fetch.fail" in error_msg.lower()
-        
-        if is_tiktok or is_tiktok_error:
-            logger.warning(f"⚠️  TikTok detected with Cobalt failure - using optimized fallback")
-            if cobalt_config.ENABLE_YTDLP_FALLBACK:
-                logger.info("🔄 Falling back to yt-dlp for TikTok...")
-                return download_via_ytdlp_fallback(url, audio_only)
-        
-        # Check if it's the API shutdown error
-        if "shut down" in error_msg.lower() or "v7" in error_msg.lower():
-            logger.warning("Cobalt API unavailable - using yt-dlp fallback")
-            if cobalt_config.ENABLE_YTDLP_FALLBACK:
-                logger.info("Usando yt-dlp como fallback...")
-                return download_via_ytdlp_fallback(url, audio_only)
-            else:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Cobalt API indisponível. Considere usar uma instância auto-hospedada do Cobalt ou habilitar o fallback para yt-dlp."
-                )
-        
-        # Optional fallback to yt-dlp for other errors
-        if cobalt_config.ENABLE_YTDLP_FALLBACK:
-            logger.info("🔄 Tentando fallback para yt-dlp...")
-            # Use the old method as fallback
-            return download_via_ytdlp_fallback(url, audio_only)
-        
-        raise HTTPException(
-            status_code=503,
-            detail=f"Erro ao baixar via Cobalt: {str(e)}. Considere usar uma instância auto-hospedada."
-        )
-    
-    except Exception as e:
-        logger.error(f"Unexpected error in Cobalt download: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro inesperado: {str(e)}"
-        )
 
 
 def detectPlatform(url: str) -> str:
@@ -2138,7 +1918,7 @@ async def get_youtube_formats(
     
     # #region agent log
     try:
-        with open('/Users/miguelcrasto/Downloads/social-media-transcription/.cursor/debug.log', 'a') as f:
+        with open(str(ROOT_DIR / ".cursor" / "debug.log"), 'a') as f:
             f.write(json.dumps({"location":"main.py:1824","message":"get_youtube_formats entry","data":{"url":url[:100]},"timestamp":int(__import__('time').time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"D,E"})+"\n")
     except: pass
     # #endregion
@@ -2156,7 +1936,7 @@ async def get_youtube_formats(
         
         # #region agent log
         try:
-            with open('/Users/miguelcrasto/Downloads/social-media-transcription/.cursor/debug.log', 'a') as f:
+            with open(str(ROOT_DIR / ".cursor" / "debug.log"), 'a') as f:
                 f.write(json.dumps({"location":"main.py:1844","message":"Before subprocess.run","data":{"cmd":' '.join(cmd[:6])+"..."},"timestamp":int(__import__('time').time()*1000),"sessionId":"debug-session","runId":"run2","hypothesisId":"E"})+"\n")
         except: pass
         # #endregion
@@ -2171,7 +1951,7 @@ async def get_youtube_formats(
         
         # #region agent log
         try:
-            with open('/Users/miguelcrasto/Downloads/social-media-transcription/.cursor/debug.log', 'a') as f:
+            with open(str(ROOT_DIR / ".cursor" / "debug.log"), 'a') as f:
                 f.write(json.dumps({"location":"main.py:1852","message":"After subprocess.run","data":{"returncode":result.returncode,"stdoutLength":len(result.stdout),"stderrLength":len(result.stderr)},"timestamp":int(__import__('time').time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"E"})+"\n")
         except: pass
         # #endregion
@@ -2243,7 +2023,7 @@ async def get_youtube_formats(
         
         # #region agent log
         try:
-            with open('/Users/miguelcrasto/Downloads/social-media-transcription/.cursor/debug.log', 'a') as f:
+            with open(str(ROOT_DIR / ".cursor" / "debug.log"), 'a') as f:
                 f.write(json.dumps({"location":"main.py:1915","message":"Before return response","data":{"formatsCount":len(formats)},"timestamp":int(__import__('time').time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"G"})+"\n")
         except: pass
         # #endregion
@@ -2256,7 +2036,7 @@ async def get_youtube_formats(
     except subprocess.TimeoutExpired as e:
         # #region agent log
         try:
-            with open('/Users/miguelcrasto/Downloads/social-media-transcription/.cursor/debug.log', 'a') as f:
+            with open(str(ROOT_DIR / ".cursor" / "debug.log"), 'a') as f:
                 f.write(json.dumps({"location":"main.py:1922","message":"TimeoutExpired","data":{"error":str(e)},"timestamp":int(__import__('time').time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"E"})+"\n")
         except: pass
         # #endregion
@@ -2264,7 +2044,7 @@ async def get_youtube_formats(
     except subprocess.CalledProcessError as e:
         # #region agent log
         try:
-            with open('/Users/miguelcrasto/Downloads/social-media-transcription/.cursor/debug.log', 'a') as f:
+            with open(str(ROOT_DIR / ".cursor" / "debug.log"), 'a') as f:
                 f.write(json.dumps({"location":"main.py:1927","message":"CalledProcessError","data":{"returncode":e.returncode,"stderr":e.stderr[:200] if e.stderr else None},"timestamp":int(__import__('time').time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"E"})+"\n")
         except: pass
         # #endregion
@@ -2273,7 +2053,7 @@ async def get_youtube_formats(
     except Exception as e:
         # #region agent log
         try:
-            with open('/Users/miguelcrasto/Downloads/social-media-transcription/.cursor/debug.log', 'a') as f:
+            with open(str(ROOT_DIR / ".cursor" / "debug.log"), 'a') as f:
                 f.write(json.dumps({"location":"main.py:1932","message":"General Exception","data":{"errorType":type(e).__name__,"errorMessage":str(e)[:200]},"timestamp":int(__import__('time').time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"A,E"})+"\n")
         except: pass
         # #endregion
@@ -2755,14 +2535,14 @@ async def transcribe_video(
     api_key: str = Security(validate_api_key)
 ):
     """
-    Baixa o áudio do vídeo via Cobalt e envia para o Whisper.
+    Baixa o áudio do vídeo via yt-dlp e envia para o Whisper.
     Retorna o texto transcrito.
     """
     audio_path = None
     try:
-        # Download audio using Cobalt
-        logger.info(f"Downloading audio via Cobalt for transcription: {request.url}")
-        result = download_via_cobalt(str(request.url), audio_only=True, quality="max")
+        # Download audio via yt-dlp
+        logger.info(f"Downloading audio via yt-dlp for transcription: {request.url}")
+        result = download_via_ytdlp_fallback(str(request.url), audio_only=True)
         
         # Save to temporary file for Whisper
         audio_path = DOWNLOADS_DIR / result["filename"]
@@ -2807,6 +2587,38 @@ async def transcribe_image(
         "text": text,
         "mime": mime_type
     }
+
+
+@app.post("/transcribe/upload-audio")
+async def transcribe_upload_audio(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    api_key: str = Security(validate_api_key)
+):
+    """Transcreve áudio/vídeo enviado como arquivo local usando Whisper."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Arquivo inválido")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    if len(data) > 500 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Arquivo muito grande (máx 500 MB)")
+
+    suffix = Path(file.filename).suffix or ".mp4"
+    tmp_input = Path(tempfile.mktemp(suffix=suffix))
+    try:
+        tmp_input.write_bytes(data)
+        audio_path = extract_audio_from_upload(tmp_input)
+        try:
+            transcript = transcribe_audio_file(audio_path, language=language or None)
+        finally:
+            audio_path.unlink(missing_ok=True)
+    finally:
+        tmp_input.unlink(missing_ok=True)
+
+    return {"success": True, "transcript": transcript}
 
 
 @app.post("/transcribe/instagram")

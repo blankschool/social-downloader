@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Backend (FastAPI)",
+      "runtimeExecutable": "venv/bin/python",
+      "runtimeArgs": ["-m", "backend.main"],
+      "port": 8000,
+      "cwd": "${workspaceRoot}"
+    },
+    {
+      "name": "Frontend (Vite)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 8080,
+      "cwd": "${workspaceRoot}/frontend"
+    }
+  ]
+}

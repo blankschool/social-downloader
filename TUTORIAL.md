@@ -28,7 +28,7 @@ Before starting, ensure you have:
 ### 1. Clone and Navigate to Project
 
 ```bash
-cd /Users/miguelcrasto/Downloads/social-media-transcription
+cd /path/to/social-media-transcription
 ```
 
 ### 2. Set Up Python Virtual Environment

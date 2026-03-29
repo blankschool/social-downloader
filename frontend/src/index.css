@@ -7,7 +7,7 @@
     --background: 0 0% 100%;
     --foreground: 0 0% 0%;
 
-    --card: 0 0% 100%;
+    --card: 0 0% 98%;
     --card-foreground: 0 0% 0%;
 
     --popover: 0 0% 100%;
@@ -28,12 +28,12 @@
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 0 0% 90%;
+    --border: 0 0% 88%;
     --input: 0 0% 96%;
     --ring: 0 0% 0%;
 
     --radius: 0.5rem;
-    
+
     --success: 142 76% 36%;
     --success-foreground: 0 0% 100%;
     --warning: 45 93% 47%;
@@ -41,33 +41,33 @@
   }
 
   .dark {
-    --background: 0 0% 0%;
-    --foreground: 0 0% 100%;
+    --background: 0 0% 4%;
+    --foreground: 0 0% 98%;
 
-    --card: 0 0% 0%;
-    --card-foreground: 0 0% 100%;
+    --card: 0 0% 7%;
+    --card-foreground: 0 0% 98%;
 
-    --popover: 0 0% 0%;
-    --popover-foreground: 0 0% 100%;
+    --popover: 0 0% 7%;
+    --popover-foreground: 0 0% 98%;
 
-    --primary: 0 0% 100%;
-    --primary-foreground: 0 0% 0%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 4%;
 
-    --secondary: 0 0% 10%;
-    --secondary-foreground: 0 0% 100%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 98%;
 
-    --muted: 0 0% 10%;
-    --muted-foreground: 0 0% 60%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 58%;
 
-    --accent: 0 0% 10%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 98%;
 
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
 
-    --border: 0 0% 20%;
+    --border: 0 0% 18%;
     --input: 0 0% 10%;
-    --ring: 0 0% 100%;
+    --ring: 0 0% 98%;
   }
 }
 
@@ -78,5 +78,22 @@
 
   body {
     @apply bg-background text-foreground;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer components {
+  .badge-error {
+    @apply text-destructive border-destructive/40 bg-destructive/10;
+  }
+  .badge-warning {
+    @apply text-amber-600 border-amber-400/40 bg-amber-50 dark:text-amber-400 dark:border-amber-400/30 dark:bg-amber-400/10;
+  }
+  .badge-info {
+    @apply text-blue-600 border-blue-400/40 bg-blue-50 dark:text-blue-400 dark:border-blue-400/30 dark:bg-blue-400/10;
+  }
+  .badge-success {
+    @apply text-emerald-600 border-emerald-400/40 bg-emerald-50 dark:text-emerald-400 dark:border-emerald-400/30 dark:bg-emerald-400/10;
   }
 }

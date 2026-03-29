@@ -5,15 +5,15 @@ pydantic>=2.8.0
 python-multipart>=0.0.17
 python-dotenv>=1.0.1
 
-# HTTP Client for Cobalt API
+# HTTP Client
 requests>=2.31.0
 
 # AI/ML Services
 openai>=1.52.2
 
 # Media Download Tools
-# gallery-dl for Instagram image extraction (carousel posts)
+yt-dlp>=2024.1.0
 gallery-dl>=1.26.0
 
-# Optional: yt-dlp kept as fallback (only if ENABLE_YTDLP_FALLBACK=true)
-# yt-dlp>=2023.11.0
+# Cookie auto-refresh (cron job semanal no VPS)
+playwright>=1.44.0

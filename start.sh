@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# Script para iniciar o Social Media Transcription localmente com ngrok
-# Uso: ./start.sh
+# Social Media Transcription — script de inicialização
+# Uso local (com ngrok): ./start.sh
+# Uso VPS (sem ngrok):   VPS_MODE=true ./start.sh
+#                        ou simplesmente: ./start.sh (ngrok é pulado se sem NGROK_AUTH_TOKEN)
 
 set -euo pipefail
 
@@ -20,23 +22,17 @@ echo -e "${CYAN}  Social Media Transcription${NC}"
 echo -e "${CYAN}========================================${NC}"
 echo ""
 
-# Carregar variáveis de ambiente do .env (incluindo NGROK_AUTH_TOKEN)
+# Carregar variáveis de ambiente do .env
 if [ -f "$ROOT_DIR/.env" ]; then
     set -a
     source "$ROOT_DIR/.env"
     set +a
 fi
 
-if [ -z "${NGROK_AUTH_TOKEN:-}" ]; then
-    echo -e "${RED}Erro: NGROK_AUTH_TOKEN não configurado${NC}"
-    echo ""
-    echo "Configure seu token do ngrok:"
-    echo "  1. Acesse https://dashboard.ngrok.com/get-started/your-authtoken"
-    echo "  2. Copie seu authtoken"
-    echo "  3. Execute: echo 'NGROK_AUTH_TOKEN=seu_token' >> .env"
-    echo ""
-    echo "Ou execute diretamente:"
-    echo "  NGROK_AUTH_TOKEN=seu_token ./start.sh"
+# Verificar API_KEY obrigatória
+if [ -z "${API_KEY:-}" ]; then
+    echo -e "${RED}Erro: API_KEY não configurada${NC}"
+    echo "Adicione ao .env:  API_KEY=sua_chave_aqui"
     exit 1
 fi
 
@@ -47,6 +43,14 @@ if [ ! -d "venv" ]; then
     exit 1
 fi
 
+# Modo VPS: escuta em 0.0.0.0 para ser acessível externamente
+VPS_MODE="${VPS_MODE:-false}"
+BIND_HOST="127.0.0.1"
+if [ "$VPS_MODE" = "true" ]; then
+    BIND_HOST="0.0.0.0"
+    echo -e "${YELLOW}Modo VPS: backend escutando em 0.0.0.0:8000${NC}"
+fi
+
 # Matar processos anteriores na porta 8000
 if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null 2>&1; then
     echo -e "${YELLOW}Parando processo anterior na porta 8000...${NC}"
@@ -54,14 +58,9 @@ if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null 2>&1; then
     sleep 1
 fi
 
-# Carregar variáveis de ambiente
-set -a
-[ -f ".env" ] && source .env
-set +a
-
 echo -e "${GREEN}1. Iniciando API Backend (porta 8000)...${NC}"
 source venv/bin/activate
-python -m backend.main &
+python3 -m uvicorn backend.main:app --host "$BIND_HOST" --port 8000 &
 API_PID=$!
 sleep 2
 
@@ -73,34 +72,43 @@ if ! curl -s http://localhost:8000/health > /dev/null 2>&1; then
 fi
 echo -e "${GREEN}   ✓ API rodando${NC}"
 
-echo ""
-echo -e "${GREEN}2. Iniciando ngrok tunnel...${NC}"
-ngrok start --config="$ROOT_DIR/ngrok.yml" backend &
-NGROK_PID=$!
-sleep 3
+# Ngrok: opcional — só inicia se NGROK_AUTH_TOKEN estiver definido e VPS_MODE=false
+NGROK_PID=""
+if [ "${VPS_MODE}" != "true" ] && [ -n "${NGROK_AUTH_TOKEN:-}" ]; then
+    echo ""
+    echo -e "${GREEN}2. Iniciando ngrok tunnel...${NC}"
+    # Injeta o token no ngrok antes de subir
+    ngrok config add-authtoken "$NGROK_AUTH_TOKEN" --config="$ROOT_DIR/ngrok.yml" > /dev/null 2>&1 || true
+    ngrok start --config="$ROOT_DIR/ngrok.yml" backend &
+    NGROK_PID=$!
+    sleep 3
+    PUBLIC_URL="https://savedown.ngrok.app"
+elif [ "${VPS_MODE}" = "true" ]; then
+    PUBLIC_URL="http://$(curl -s ifconfig.me 2>/dev/null || echo 'SEU_IP'):8000"
+else
+    PUBLIC_URL="http://localhost:8000"
+fi
 
 echo ""
 echo -e "${CYAN}========================================${NC}"
 echo -e "${GREEN}Sistema iniciado!${NC}"
 echo ""
-echo -e "  ${CYAN}URL Pública:${NC} https://savedown.ngrok.app"
+echo -e "  ${CYAN}URL Pública:${NC} $PUBLIC_URL"
 echo -e "  ${CYAN}API Local:${NC}   http://localhost:8000"
-echo -e "  ${CYAN}Frontend:${NC}    frontend/dist/index.html"
+echo -e "  ${CYAN}Frontend:${NC}    http://localhost:8000/ui"
 echo ""
 echo -e "${YELLOW}Pressione CTRL+C para parar${NC}"
 echo -e "${CYAN}========================================${NC}"
 
-# Função para limpar ao sair
 cleanup() {
     echo ""
     echo -e "${YELLOW}Parando serviços...${NC}"
     kill $API_PID 2>/dev/null || true
-    kill $NGROK_PID 2>/dev/null || true
+    [ -n "$NGROK_PID" ] && kill $NGROK_PID 2>/dev/null || true
     echo -e "${GREEN}Serviços parados.${NC}"
     exit 0
 }
 
 trap cleanup SIGINT SIGTERM
 
-# Aguardar
 wait

@@ -1,5 +1,7 @@
 version: "2"
-authtoken: ${NGROK_AUTH_TOKEN}
+# Token lido do env pelo ngrok. Configure: ngrok config add-authtoken $NGROK_AUTH_TOKEN
+# NÃO commite este arquivo com token real.
+authtoken: ""
 tunnels:
   backend:
     proto: http

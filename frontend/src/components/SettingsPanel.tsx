@@ -9,7 +9,6 @@ export interface AppSettings {
 }
 
 interface SettingsPanelProps {
-  isDark: boolean;
   onClose: () => void;
   onSettingsChange?: (settings: AppSettings) => void;
 }
@@ -20,10 +19,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   transcriptionLanguage: 'auto',
 };
 
-export function SettingsPanel({ isDark, onClose, onSettingsChange }: SettingsPanelProps) {
+export function SettingsPanel({ onClose, onSettingsChange }: SettingsPanelProps) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
-  // Load settings from localStorage on mount
   useEffect(() => {
     const savedSettings = localStorage.getItem('app_settings');
     if (savedSettings) {
@@ -36,47 +34,46 @@ export function SettingsPanel({ isDark, onClose, onSettingsChange }: SettingsPan
     }
   }, []);
 
-  // Save settings to localStorage and notify parent when they change
   const updateSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const newSettings = { ...settings, [key]: value };
     setSettings(newSettings);
     localStorage.setItem('app_settings', JSON.stringify(newSettings));
     onSettingsChange?.(newSettings);
   };
+
   return (
-    <motion.div 
-      className={`${isDark ? 'bg-[#1a1a1a] border-[#2a2a2a]' : 'bg-white border-[#e0e0e0]'} border rounded-xl p-6 space-y-6`}
+    <motion.div
+      className="rounded-lg border border-border bg-card px-6 py-5 space-y-5"
       initial={{ opacity: 0, y: -20, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -20, scale: 0.95 }}
       transition={{ duration: 0.3 }}
     >
       <div className="flex items-center justify-between">
-        <h3 className="text-xl font-semibold">Configurações</h3>
+        <h3 className="font-serif text-[15px] font-normal tracking-tight">Configurações</h3>
         <motion.button
           onClick={onClose}
-          className={`p-1 ${isDark ? 'hover:bg-[#252525]' : 'hover:bg-[#f0f0f0]'} rounded transition-colors`}
+          className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground hover:text-foreground"
           aria-label="Fechar configurações"
           whileHover={{ scale: 1.1, rotate: 90 }}
           whileTap={{ scale: 0.9 }}
         >
-          <X className="w-5 h-5" />
+          <X className="w-4 h-4" />
         </motion.button>
       </div>
 
       <div className="space-y-4">
-        {/* Video Quality */}
-        <motion.div 
-          className="space-y-2"
+        <motion.div
+          className="space-y-1.5"
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.1 }}
         >
-          <label className={`text-sm ${isDark ? 'text-[#a0a0a0]' : 'text-[#666666]'}`}>Qualidade do Vídeo</label>
-          <select 
+          <label className="text-xs font-medium text-muted-foreground">Qualidade do Vídeo</label>
+          <select
             value={settings.videoQuality}
             onChange={(e) => updateSetting('videoQuality', e.target.value)}
-            className={`w-full px-4 py-2 ${isDark ? 'bg-[#0f0f0f] border-[#2a2a2a] text-white' : 'bg-[#f5f5f5] border-[#d0d0d0] text-[#1a1a1a]'} border rounded-lg focus:outline-none ${isDark ? 'focus:border-[#4a4a4a]' : 'focus:border-[#999999]'}`}
+            className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-ring text-foreground"
           >
             <option value="max">Máxima (padrão)</option>
             <option value="1080">1080p</option>
@@ -85,18 +82,17 @@ export function SettingsPanel({ isDark, onClose, onSettingsChange }: SettingsPan
           </select>
         </motion.div>
 
-        {/* Audio Format */}
-        <motion.div 
-          className="space-y-2"
+        <motion.div
+          className="space-y-1.5"
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.15 }}
         >
-          <label className={`text-sm ${isDark ? 'text-[#a0a0a0]' : 'text-[#666666]'}`}>Formato de Áudio</label>
-          <select 
+          <label className="text-xs font-medium text-muted-foreground">Formato de Áudio</label>
+          <select
             value={settings.audioFormat}
             onChange={(e) => updateSetting('audioFormat', e.target.value)}
-            className={`w-full px-4 py-2 ${isDark ? 'bg-[#0f0f0f] border-[#2a2a2a] text-white' : 'bg-[#f5f5f5] border-[#d0d0d0] text-[#1a1a1a]'} border rounded-lg focus:outline-none ${isDark ? 'focus:border-[#4a4a4a]' : 'focus:border-[#999999]'}`}
+            className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-ring text-foreground"
           >
             <option value="mp3">MP3</option>
             <option value="wav">WAV</option>
@@ -104,18 +100,17 @@ export function SettingsPanel({ isDark, onClose, onSettingsChange }: SettingsPan
           </select>
         </motion.div>
 
-        {/* Transcription Language */}
-        <motion.div 
-          className="space-y-2"
+        <motion.div
+          className="space-y-1.5"
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.2 }}
         >
-          <label className={`text-sm ${isDark ? 'text-[#a0a0a0]' : 'text-[#666666]'}`}>Idioma da Transcrição</label>
-          <select 
+          <label className="text-xs font-medium text-muted-foreground">Idioma da Transcrição</label>
+          <select
             value={settings.transcriptionLanguage}
             onChange={(e) => updateSetting('transcriptionLanguage', e.target.value)}
-            className={`w-full px-4 py-2 ${isDark ? 'bg-[#0f0f0f] border-[#2a2a2a] text-white' : 'bg-[#f5f5f5] border-[#d0d0d0] text-[#1a1a1a]'} border rounded-lg focus:outline-none ${isDark ? 'focus:border-[#4a4a4a]' : 'focus:border-[#999999]'}`}
+            className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-ring text-foreground"
           >
             <option value="auto">Detectar automaticamente</option>
             <option value="pt">Português</option>
@@ -130,32 +125,31 @@ export function SettingsPanel({ isDark, onClose, onSettingsChange }: SettingsPan
           </select>
         </motion.div>
 
-        {/* Toggle Options */}
-        <motion.div 
-          className="space-y-3 pt-2"
+        <motion.div
+          className="space-y-3 pt-1"
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.25 }}
         >
-          <label className="flex items-center justify-between cursor-pointer">
-            <span className={`text-sm ${isDark ? 'text-[#a0a0a0]' : 'text-[#666666]'}`}>Incluir áudio nos downloads de vídeo</span>
-            <input type="checkbox" defaultChecked className="w-4 h-4" />
-          </label>
-          
-          <label className="flex items-center justify-between cursor-pointer">
-            <span className={`text-sm ${isDark ? 'text-[#a0a0a0]' : 'text-[#666666]'}`}>Transcrever áudio automaticamente</span>
-            <input type="checkbox" className="w-4 h-4" />
+          <label className="flex items-center justify-between cursor-pointer gap-3">
+            <span className="text-xs text-muted-foreground">Incluir áudio nos downloads de vídeo</span>
+            <input type="checkbox" defaultChecked className="w-4 h-4 accent-foreground" />
           </label>
 
-          <label className="flex items-center justify-between cursor-pointer">
-            <span className={`text-sm ${isDark ? 'text-[#a0a0a0]' : 'text-[#666666]'}`}>Baixar todas as imagens do carrossel</span>
-            <input type="checkbox" defaultChecked className="w-4 h-4" />
+          <label className="flex items-center justify-between cursor-pointer gap-3">
+            <span className="text-xs text-muted-foreground">Transcrever áudio automaticamente</span>
+            <input type="checkbox" className="w-4 h-4 accent-foreground" />
+          </label>
+
+          <label className="flex items-center justify-between cursor-pointer gap-3">
+            <span className="text-xs text-muted-foreground">Baixar todas as imagens do carrossel</span>
+            <input type="checkbox" defaultChecked className="w-4 h-4 accent-foreground" />
           </label>
         </motion.div>
       </div>
 
-      <div className={`pt-4 border-t ${isDark ? 'border-[#2a2a2a]' : 'border-[#e0e0e0]'}`}>
-        <p className={`text-xs ${isDark ? 'text-[#6a6a6a]' : 'text-[#999999]'}`}>
+      <div className="pt-2 border-t border-border">
+        <p className="text-xs text-muted-foreground/60">
           As configurações são salvas localmente no seu navegador
         </p>
       </div>

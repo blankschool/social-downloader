@@ -4,10 +4,9 @@ import { useState } from 'react';
 
 interface AudioResultProps {
   transcription: string;
-  isDark: boolean;
 }
 
-export function AudioResult({ transcription, isDark }: AudioResultProps) {
+export function AudioResult({ transcription }: AudioResultProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -34,58 +33,40 @@ export function AudioResult({ transcription, isDark }: AudioResultProps) {
 
   return (
     <motion.div
-      className={`${
-        isDark ? 'bg-[#1a1a1a] border-[#2a2a2a]' : 'bg-white border-[#e0e0e0]'
-      } border rounded-xl p-6 space-y-4`}
+      className="rounded-lg border border-border bg-card px-6 py-5 space-y-4"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <FileText className={`w-5 h-5 ${isDark ? 'text-[#6a6a6a]' : 'text-[#999999]'}`} />
-          <h3 className="text-lg font-semibold">Transcrição de Áudio</h3>
+          <FileText className="w-4 h-4 text-muted-foreground" />
+          <h3 className="font-serif text-[15px] font-normal tracking-tight">Transcrição de Áudio</h3>
         </div>
         <div className="flex items-center gap-2">
           <motion.button
             onClick={handleCopy}
-            className={`px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
-              isDark
-                ? 'bg-[#252525] hover:bg-[#2a2a2a]'
-                : 'bg-[#e0e0e0] hover:bg-[#d0d0d0]'
-            }`}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+            className="px-3 py-1.5 rounded-lg text-xs bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
           >
-            <Copy className="w-4 h-4" />
+            <Copy className="w-3.5 h-3.5" />
             {copied ? 'Copiado!' : 'Copiar'}
           </motion.button>
           <motion.button
             onClick={handleDownloadText}
-            className={`px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
-              isDark
-                ? 'bg-[#4a4a4a] text-white hover:bg-[#5a5a5a]'
-                : 'bg-[#1a1a1a] text-white hover:bg-[#2a2a2a]'
-            }`}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+            className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5"
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-3.5 h-3.5" />
             Baixar .txt
           </motion.button>
         </div>
       </div>
 
-      <div
-        className={`p-4 ${
-          isDark ? 'bg-[#0f0f0f] border-[#2a2a2a]' : 'bg-[#f5f5f5] border-[#e0e0e0]'
-        } border rounded-lg`}
-      >
-        <p
-          className={`text-sm ${
-            isDark ? 'text-[#a0a0a0]' : 'text-[#666666]'
-          } leading-relaxed whitespace-pre-wrap`}
-        >
+      <div className="rounded-lg border border-border bg-background px-4 py-3">
+        <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">
           {transcription}
         </p>
       </div>
