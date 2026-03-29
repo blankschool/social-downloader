@@ -1359,6 +1359,8 @@ def execute_ytdlp(url: str, download_file: bool = True, output_format: str = "mp
                 # YouTube: ALWAYS best quality (same as execute_ytdlp_optimized)
                 cmd.extend(get_youtube_best_quality_args())
                 cmd.extend([
+                    '--merge-output-format', 'mp4',
+                    '--remux-video', 'mp4',
                     '--concurrent-fragments', '16',
                     '--buffer-size', '32K',
                     '--http-chunk-size', '10M',
