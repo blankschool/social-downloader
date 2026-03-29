@@ -518,8 +518,10 @@ def get_youtube_best_quality_args() -> list[str]:
     - No player_client specified: let yt-dlp auto-select working client (tries multiple: android, ios, web, mweb)
     - Sort: resolution descending, then fps, so we get 4K/1080p first.
     - Format: best video + best audio (any codec: VP9, AV1, H.264), fallback to single best.
+    - --js-runtimes node: enables Node.js for n-challenge solving (required on VPS with Node.js v20+)
     """
     return [
+        "--js-runtimes", "node",  # Enable Node.js for YouTube n-challenge solving
         "-S", "res,fps",  # Prefer highest resolution, then highest fps
         "-f", "bv*+ba/bestvideo+bestaudio/best",
     ]
